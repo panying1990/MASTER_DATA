@@ -1,0 +1,360 @@
+-- ----------------------------------用户基本情况展示-----------------------
+-- 该部分仅仅统计2016年以来零售渠道全部用户数，其中
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS user_trans_rfm_pay;
+CREATE TABLE user_trans_rfm_pay(
+	chnnl_type VARCHAR (50) NULL,
+	shp_nm VARCHAR (50) NULL,
+	ordr_id VARCHAR (50) NULL,
+	pro_nm VARCHAR (50) NULL,
+	pro_code VARCHAR (50) NULL,
+	user_id VARCHAR (50) NULL,
+	user_area VARCHAR (50) NULL,
+	user_sale VARCHAR (50) NULL,
+	pay_date_diff VARCHAR (50) NULL,
+	pay_date VARCHAR (50) NULL,
+	del_date VARCHAR (50) NULL,
+	max_pay_time VARCHAR (50) NULL,
+	min_pay_time VARCHAR (50) NULL,
+	r_factor VARCHAR (50) NULL,
+	f_factor VARCHAR (50) NULL,
+	s_factor VARCHAR (50) NULL
+) ENGINE = INNODB;
+INSERT INTO user_trans_rfm_pay(
+chnnl_type,
+ shp_nm,
+ ordr_id,
+ pro_nm,
+ pro_code,
+ user_id,
+ user_area,
+ user_sale,
+ pay_date_diff,
+ pay_date,
+ del_date,
+ max_pay_time,
+ min_pay_time,
+ r_factor,
+ f_factor,
+ s_factor
+)
+SELECT
+ tt.chnnl_type,
+ tt.shp_nm,
+ tt.ordr_id,
+ tt.pro_nm,
+ tt.pro_code,
+ tt.user_id,
+ tt.user_area,
+ tt.user_sale,
+ tt.pay_date_diff,
+ CONCAT(LEFT(tt.pay_date,10)) AS pay_date,
+ CONCAT(LEFT(tt.del_date,10)) AS del_date,
+ CONCAT(LEFT(ta.max_pay_time,10)) AS max_pay_time,
+ CONCAT(LEFT(ta.min_pay_time,10)) AS min_pay_time,
+ ta.r_factor,
+ ta.f_factor,
+ ta.s_factor
+FROM (
+	SELECT
+		tt.`渠道类型` AS chnnl_type,
+		tt.店铺名称 AS shp_nm,
+		tt.订单编号 AS ordr_id,
+		tt.`品名` AS pro_nm,
+		tt.`条形码` AS pro_code,
+		CONCAT(
+			tt.`收货手机`,
+			tt.`收货人`
+		) AS user_id,
+		LEFT (tt.`省`, 2) AS user_area,
+		DATE_FORMAT(tt.付款日期, "%Y-%m-%d") AS pay_date,
+		DATE_FORMAT(tt.发货日期, "%Y-%m-%d") AS del_date,
+    ROUND(SUM(tt.`产品销售总价sum`),2) AS user_sale,
+		DATEDIFF(
+			DATE_FORMAT(NOW(),"%Y-%m-%d"),
+			DATE_FORMAT(tt.付款日期,"%Y-%m-%d")
+		) AS pay_date_diff
+	FROM
+		(SELECT -- 付款时间有部分数据为空置
+		        tt.*
+	         FROM
+		        temp_data.trans_data_temp tt
+	         WHERE
+		        LENGTH(tt.付款时间) > 0
+	         AND tt.渠道类型 = '零售') tt
+	GROUP BY
+		chnnl_type,
+		shp_nm,
+		ordr_id,
+		pro_nm,
+		pro_code,
+		user_id,
+		user_area
+	HAVING
+    user_sale > 0
+	AND user_id IS NOT NULL
+) tt
+LEFT JOIN(
+	SELECT
+		ta.user_id,
+		ROUND(MIN(ta.pay_date_diff), 2) AS r_factor,
+		COUNT(ta.pay_date) AS f_factor,
+		MAX(ta.pay_date) AS max_pay_time,
+		MIN(ta.pay_date) AS min_pay_time,
+		ROUND(SUM(ta.user_sale), 2) AS s_factor
+	FROM
+		(SELECT
+				tt.`渠道类型` AS chnnl_type,
+				tt.店铺名称 AS shp_nm,
+				tt.订单编号 AS ordr_id,
+				tt.`品名` AS pro_nm,
+				tt.`条形码` AS pro_code,
+				CONCAT(
+					tt.`收货手机`,
+					tt.`收货人`
+				) AS user_id,
+				LEFT (tt.`省`, 2) AS user_area,
+				DATE_FORMAT(tt.付款日期, "%Y-%m-%d") AS pay_date,
+				DATE_FORMAT(tt.发货日期, "%Y-%m-%d") AS del_date,
+				ROUND(SUM(tt.`产品销售总价sum`),2) AS user_sale,
+				DATEDIFF(
+			  DATE_FORMAT(NOW(),"%Y-%m-%d"),
+			  DATE_FORMAT(tt.付款日期,"%Y-%m-%d")) AS pay_date_diff
+			FROM(SELECT -- 付款时间有部分数据为空置
+		        tt.*
+	         FROM
+		        temp_data.trans_data_temp tt
+	         WHERE
+		        LENGTH(tt.付款时间) > 0
+	         AND tt.渠道类型 = '零售') tt
+			GROUP BY
+				chnnl_type,
+				shp_nm,
+				ordr_id,
+				pro_nm,
+				pro_code,
+				user_id,
+				user_area
+			HAVING
+        user_sale > 0
+			AND user_id IS NOT NULL) ta
+	GROUP BY
+		ta.user_id
+	HAVING
+		f_factor > 0
+	AND s_factor > 1
+	ORDER BY
+		s_factor
+) ta
+ON tt.user_id=ta.user_id
+WHERE r_factor IS NOT NULL;
+ROLLBACK;
+
+-- kd_trade用户数据分析基础表拆分创建订单、付款订单、完成订单
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS user_crm_created;
+CREATE TABLE user_crm_created AS
+SELECT
+		DATE_FORMAT(tt.created,"%Y-%m-%d") AS created_date,
+    (CASE WHEN tt.app_entrance=1 THEN 'PC' ELSE 'Mobile' END) AS pv_entrance,
+    (CASE WHEN tt.brand_id=582 THEN '碧生源' ELSE '' END)AS brand_name,
+    kp.plat_from_name AS plat_from_name,
+		tt.out_trade_id,
+		tt.out_nick,
+		tt.shop_id,
+    ks.uid AS company_name,
+    ks.shop_name AS shop_name,
+		tt.sys_trade_id,
+		tt.sys_customer_id,
+		tt.trade_type,
+		tt.trade_from,
+		tt.pay_time,
+		tt.consign_time,
+		tt.end_time,
+		tt.num,
+		tt.payment,
+		tt.total_fee,
+		tt.modify_time,
+		tt.post_fee,
+		tt.discount_fee,
+		tt.receiver_province,
+		tt.receiver_city,
+		tt.buyer_message,
+		tt.seller_memo,
+		tt.remark_sign,
+		tt.buyer_rate,
+		tt.app_entrance,
+		tt.is_free,
+		tt.pay_type,
+		tt.return_order_type,
+		tt.step_trade_status,
+		tt.step_paid_fee,
+		tt.audit_status,
+    DATEDIFF(CURDATE(),DATE_FORMAT(tt.created,"%Y-%m-%d")) AS created_diff
+FROM(SELECT
+			-- 排除订单创建时间有部分数据为空置,订单未发货阶段,且数据异常的原始数据
+			id,
+			state,
+			create_time,
+			update_time,
+			brand_id,
+			category_id,
+			plat_from_id,
+			out_trade_id,
+			out_nick,
+			shop_id,
+			sys_trade_id,
+			sys_customer_id,
+			trade_type,
+			trade_from,
+			trade_status_init,
+			created,
+			pay_time,
+			consign_time,
+			end_time,
+			num,
+			payment,
+			total_fee,
+			modify_time,
+			post_fee,
+			discount_fee,
+			receiver_province,
+			receiver_city,
+			buyer_message,
+			seller_memo,
+			remark_sign,
+			buyer_rate,
+			app_entrance,
+			is_free,
+			pay_type,
+			return_order_type,
+			step_trade_status,
+			step_paid_fee,
+			audit_status
+		FROM
+			crm_kd.kd_trade tt
+		WHERE
+			LENGTH(tt.created) > 0
+		AND tt.trade_status IN (
+			'TRADE_BUYER_SIGNED',
+			'TRADE_CLOSED',
+			'TRADE_CLOSED_BY_TAOBAO',
+			'TRADE_FINISHED',
+			'TRADE_NO_CREATE_PAY',
+			'WAIT_SELLER_SEND_GOODS')
+   AND tt.state=1
+	)tt
+LEFT JOIN crm_kd.kd_platinfo kp ON tt.plat_from_id=kp.plat_from_id
+LEFT JOIN crm_kd.kd_shop ks ON tt.shop_id=ks.shop_id
+WHERE
+ DATE_FORMAT(tt.created,"%Y")>2015;;
+ROLLBACK;	
+
+
+-- kd_trade用户数据分析基础表拆分付款订单、完成订单
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS user_crm_pay;
+CREATE TABLE user_crm_pay AS
+SELECT
+		DATE_FORMAT(tt.pay_time,"%Y-%m-%d") AS pay_date,
+    (CASE WHEN tt.app_entrance=1 THEN 'PC' ELSE 'Mobile' END) AS pv_entrance,
+    (CASE WHEN tt.brand_id=582 THEN '碧生源' ELSE '' END)AS brand_name,
+    kp.plat_from_name AS plat_from_name,
+		tt.out_trade_id,
+		tt.out_nick,
+		tt.shop_id,
+    ks.uid AS company_name,
+    ks.shop_name AS shop_name,
+		tt.sys_trade_id,
+		tt.sys_customer_id,
+		tt.trade_type,
+		tt.trade_from,
+		tt.pay_time,
+		tt.consign_time,
+		tt.end_time,
+		tt.num,
+		tt.payment,
+		tt.total_fee,
+		tt.modify_time,
+		tt.post_fee,
+		tt.discount_fee,
+		tt.receiver_province,
+		tt.receiver_city,
+		tt.buyer_message,
+		tt.seller_memo,
+		tt.remark_sign,
+		tt.buyer_rate,
+		tt.app_entrance,
+		tt.is_free,
+		tt.pay_type,
+		tt.return_order_type,
+		tt.step_trade_status,
+		tt.step_paid_fee,
+		tt.audit_status,
+    DATEDIFF(CURDATE(),DATE_FORMAT(tt.pay_time,"%Y-%m-%d")) AS created_diff
+FROM(SELECT
+			-- 排除订单创建时间有部分数据为空置,订单未发货阶段,且数据异常的原始数据
+			id,
+			state,
+			create_time,
+			update_time,
+			brand_id,
+			category_id,
+			plat_from_id,
+			out_trade_id,
+			out_nick,
+			shop_id,
+			sys_trade_id,
+			sys_customer_id,
+			trade_type,
+			trade_from,
+			trade_status_init,
+			created,
+			pay_time,
+			consign_time,
+			end_time,
+			num,
+			payment,
+			total_fee,
+			modify_time,
+			post_fee,
+			discount_fee,
+			receiver_province,
+			receiver_city,
+			buyer_message,
+			seller_memo,
+			remark_sign,
+			buyer_rate,
+			app_entrance,
+			is_free,
+			pay_type,
+			return_order_type,
+			step_trade_status,
+			step_paid_fee,
+			audit_status
+		FROM
+			crm_kd.kd_trade tt
+		WHERE
+			LENGTH(tt.pay_time) > 0
+		AND tt.trade_status IN (
+			'TRADE_BUYER_SIGNED',
+			'TRADE_CLOSED',
+			'TRADE_CLOSED_BY_TAOBAO',
+			'TRADE_FINISHED',
+			'TRADE_NO_CREATE_PAY',
+			'WAIT_SELLER_SEND_GOODS')
+   AND tt.state=1
+	)tt
+LEFT JOIN crm_kd.kd_platinfo kp ON tt.plat_from_id=kp.plat_from_id
+LEFT JOIN crm_kd.kd_shop ks ON tt.shop_id=ks.shop_id
+WHERE
+ DATE_FORMAT(tt.pay_time,"%Y")>2015;
+ROLLBACK;	
+
+
