@@ -1,0 +1,593 @@
+-- ----------------------------------市场数据处理------------------------------------------
+-- AUTHORS:PANYING
+-- 市场数据汇总，主要指外部数据中市场监测部分、业务过程数据中市场推广部分
+-- 外部市场数据汇总处理
+-- 1药网市场监测数据
+USE bsy_business;
+
+START TRANSACTION;
+
+DROP TABLE
+IF EXISTS market_frsdrg_monitor;
+
+CREATE TABLE market_frsdrg_monitor AS SELECT
+	DATE_FORMAT(mm.date_id, "%Y-%m-%d") AS date_id,
+	mm.pm_id,
+	mm.pm_name,
+	mm.brand_id,
+	mm.pro_name,
+	mm.brand_name,
+	mm.ordr_srce_name,
+	mm.sell_price,
+	mm.pv,
+	mm.uv,
+	mm.ordr_cunt,
+	mm.pcg_an_ordr,
+	mm.swap_ordr,
+	mm.user_cunt,
+	mm.member_cunt,
+	mm.home_uv,
+	mm.cms_uv,
+	mm.prod_uv,
+	mm.search_uv,
+	mm.addcart_uv,
+	mm.other_uv,
+	ROUND(mm.ordr_cunt * mm.sell_price,2) AS ordr_uv_sale,
+  ROUND(mm.user_cunt * mm.sell_price,2) AS user_uv_sale,
+	ROUND(mm.member_cunt * mm.sell_price,2) AS member_uv_sale
+FROM
+	master_data.monitor_firstdrug_data mm;
+ROLLBACK;
+
+-- 天猫市场监测数据
+START TRANSACTION;
+
+USE bsy_business;
+
+DROP TABLE
+IF EXISTS market_tmall_monitor;
+
+CREATE TABLE market_tmall_monitor AS SELECT
+	DATE_FORMAT(tt.`日期`, "%Y-%m-%d") AS mntr_date,
+	tt.`产品品名` AS mntr_pro_nm,
+	tt.`最小品规` AS mntr_pro_sk,
+	tt.`店铺名称` AS mntr_shp_nm,
+	SUM(tt.`支付子订单数`) AS py_ordr_sm,
+	ROUND(AVG(tt.`商品价格`), 2) AS py_prc_av,
+	ROUND(
+		SUM(
+			tt.`商品价格` * tt.`支付子订单数`
+		),
+		2
+	) AS py_sl_sm
+FROM
+	master_data.monitor_tmall_data tt
+GROUP BY
+	mntr_date,
+	mntr_pro_nm,
+	mntr_pro_sk,
+	mntr_shp_nm;
+
+ROLLBACK;
+
+-- 市场推广类数据处理
+-- 1.1、淘宝客
+START TRANSACTION;
+
+USE temp_data;
+
+DROP TABLE
+IF EXISTS mkt_product_tbk;
+
+CREATE TABLE mkt_product_tbk AS SELECT
+	DATE_FORMAT(tt.结算时间, "%Y-%m-%d") AS mkt_time,
+	tt.商品名称 AS mkt_product_name,
+	tt.佣金 AS mkt_fee,
+	tt.产品名 AS product_name,
+	tt.产品条形码 AS product_code,
+	CASE
+WHEN ISNULL(tt.产品条形码) THEN
+	''
+ELSE
+	"tbk"
+END AS mkt_type,
+ CASE
+WHEN tt.产品条形码 = 12306 THEN -- 编号为12306表示该产品条形码所对应的产品名称为无法按照产品类型进行划分的数据
+	"total"
+ELSE
+	"product"
+END AS mkt_product,
+ CASE
+WHEN tt.产品条形码 = 12306 THEN
+	"碧生源官方旗舰店"
+ELSE
+	"碧生源官方旗舰店"
+END AS shop_name
+FROM
+	(
+		SELECT
+			ta.结算时间,
+			ta.商品名称,
+			ta.佣金,
+			tb.品牌名,
+			tb.产品名,
+			tb.产品条形码
+		FROM
+			master_data.mkt_tbk_data ta
+		LEFT JOIN master_data.std_tbk_product tb ON ta.商品名称 = tb.产品名称
+	) tt;
+
+
+-- 1.2、直通车
+START TRANSACTION;
+
+USE temp_data;
+
+DROP TABLE
+IF EXISTS mkt_product_ztc;
+CREATE TABLE  mkt_product_ztc AS
+SELECT
+  DATE_FORMAT(tt.日期,"%Y-%m-%d") AS mkt_time,
+  tt.推广计划名称 AS mkt_product_name,
+  tt.花费 AS mkt_fee,
+  tt.产品名,
+  tt.产品条形码,
+  CASE WHEN ISNULL(tt.产品条形码) THEN "FALSE" ELSE "ztc" END AS mkt_type,
+  CASE WHEN tt.产品条形码=12306 THEN "total" ELSE "product" END AS mkt_product,
+  CASE WHEN tt.产品条形码=12306 THEN "碧生源官方旗舰店" ELSE "碧生源官方旗舰店" END AS shop_name
+FROM (SELECT
+  ta.`日期`,
+  ta.`花费`,
+  ta.`推广计划名称`,
+  tb.`产品名`,
+  tb.`产品条形码`
+FROM
+  master_data.mkt_ztc_data ta LEFT JOIN master_data.std_ztc_product tb ON ta.`推广计划名称`=tb.`推广计划`) tt;
+
+-- 1.3 钻展的计划
+START TRANSACTION;
+
+USE temp_data;
+DROP TABLE
+IF EXISTS mkt_product_zz;
+CREATE TABLE  mkt_product_zz AS
+SELECT
+  DATE_FORMAT(tt.the_pay_date,"%Y-%m-%d") AS mkt_time,
+  tt.计划基本信息 AS mkt_product_name,
+  tt.the_zz_fee AS mkt_fee,
+  tt.产品名,
+  tt.产品条形码,
+  CASE WHEN ISNULL(tt.the_zz_fee) THEN "FALSE" ELSE "zz" END AS mkt_type,
+  CASE WHEN ISNULL(tt.the_zz_fee) THEN "product" ELSE "total" END AS mkt_product,
+  CASE WHEN tt.产品条形码=12306 THEN "碧生源官方旗舰店" ELSE "碧生源官方旗舰店" END AS shop_name
+FROM(SELECT
+  tb.the_pay_date,
+  tb.the_zz_fee,
+  tb.`计划基本信息`,
+ CASE WHEN ISNULL(tb.the_zz_fee) THEN "" ELSE "12306" END AS 产品条形码,
+ CASE WHEN ISNULL(tb.the_zz_fee) THEN "" ELSE "汇总" END AS 产品名
+FROM
+  master_data.mkt_zz_data tb ) tt;
+
+
+-- 1.4、京挑客,导入数据需要做产品信息维护
+
+START TRANSACTION;
+
+UPDATE master_data.mkt_jtk_data t1
+LEFT JOIN master_data.std_jtk_product t2 ON t1.商品编号 = t2.产品京东ID
+SET t1.商品编号 = t2.产品京东ID,
+ t1.品牌名 = t2.品牌名,
+ t1.商品名 = t2.商品名,
+ t1.规格 = t2.规格,
+ t1.产品条形码 = t2.产品条形码
+WHERE
+	t1.品牌名 IS NULL;
+
+ROLLBACK;
+USE temp_data;
+DROP TABLE
+IF EXISTS mkt_product_jtk;
+CREATE TABLE  mkt_product_jtk AS
+SELECT
+  DATE_FORMAT(tt.`下单日期`,"%Y-%m-%d") AS mkt_time,
+  tt.`所属计划` AS mkt_product_name,
+  tt.`服务费` AS mkt_fee,
+  tt.`商品名` AS 产品名,
+  tt.`产品条形码`,
+  CASE WHEN ISNULL(tt.产品条形码) THEN 'jtk' ELSE "jtk" END AS mkt_type,
+  CASE WHEN tt.产品条形码=12306 THEN "total" ELSE "product" END AS mkt_product,
+  CASE WHEN tt.产品条形码=12306 THEN "京东店铺" ELSE "京东店铺" END AS shop_name
+FROM (SELECT
+  ta.`下单日期`,
+  ta.`服务费`,
+  ta.`所属计划`,
+  ta.`商品名`,
+  ta.`产品条形码`
+FROM
+  master_data.mkt_jtk_data ta) tt
+WHERE
+  tt.`所属计划` IS NOT NULL;
+
+-- 1.5、京东推广
+START TRANSACTION;
+USE temp_data;
+DROP TABLE
+IF EXISTS mkt_product_jtg;
+CREATE TABLE  mkt_product_jtg AS
+SELECT
+  DATE_FORMAT(tt.`日期`,"%Y-%m-%d") AS mkt_time,
+  tt.`推广计划` AS mkt_product_name,
+  tt.`总费用` AS mkt_fee,
+  tt.`产品名`,
+  tt.`产品条形码`,
+  CASE WHEN ISNULL(tt.产品条形码) THEN "jtg" ELSE "jtg" END AS mkt_type,
+  CASE WHEN tt.产品条形码=12306 THEN "total" ELSE "product" END AS mkt_product,
+  CASE WHEN tt.产品条形码=12306 THEN "京东店铺" ELSE "京东店铺" END AS shop_name
+FROM(SELECT
+  tb.`日期`,
+  tb.`总费用`,
+  tb.`推广计划`,
+  ta.`产品名`,
+  ta.`产品条形码`
+FROM
+  master_data.mkt_jtg_data tb LEFT JOIN master_data.std_jtg_product ta ON tb.`推广计划`=ta.`推广计划`) tt;
+SAVEPOINT update_jtg;
+-- 1.5 京东推广中海投计划，故采用汇总数-每日数据获得海投计划的数据
+UPDATE mkt_product_jtg td
+SET  td.mkt_product_name="海投计划",
+     td.mkt_fee=(SELECT tc.haitou_fee FROM(SELECT
+	           tb.mkt_time,
+	           ROUND(total_fee - other_fee, 1) AS haitou_fee
+            FROM(SELECT
+			           ta.mkt_time,
+			           SUM(CASE WHEN mkt_product_name_type = "total" THEN ta.mkt_fee ELSE 0 END ) AS total_fee,
+			           SUM(CASE WHEN mkt_product_name_type = "other" THEN ta.mkt_fee ELSE 0 END ) AS other_fee
+		             FROM(SELECT
+					             tt.mkt_time,
+					             tt.mkt_product_name,
+					             (CASE WHEN tt.mkt_product_name = "汇总" THEN "total" ELSE "other" END) AS mkt_product_name_type,
+					             tt.mkt_fee
+				              FROM
+					             mkt_product_jtg tt) ta
+		        GROUP BY
+            ta.mkt_time) tb)tc
+                 WHERE tc.mkt_time=td.mkt_time)
+WHERE td.mkt_product_name="汇总";
+
+
+
+#2.该部分将全部进行产品类型划分的数据进行汇总
+#受影响的行: 2887
+#时间: 0.307s
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS market_product_day;
+CREATE TABLE market_product_day AS
+SELECT
+ tt.mkt_time,
+ tt.mkt_type,
+ tt.shop_name,
+ tt.mkt_product,
+ tt.产品条形码,
+ ROUND(SUM(tt.mkt_fee),2) AS mkt_fee
+FROM(
+(select t1.* from temp_data.mkt_product_jtg t1 order by t1.mkt_time) 
+union 
+(select t2.* from temp_data.mkt_product_jtk t2 order by t2.mkt_time)
+union 
+(select t3.* from temp_data.mkt_product_tbk t3 order by t3.mkt_time)
+union 
+(select t4.* from temp_data.mkt_product_ztc t4 order by t4.mkt_time)
+union 
+(select t5.* from temp_data.mkt_product_zz t5 order by t5.mkt_time)
+) tt
+GROUP BY
+ tt.mkt_time,
+ tt.mkt_type,
+ tt.shop_name,
+ tt.mkt_product,
+ tt.产品条形码
+HAVING
+ mkt_fee>0;
+ 
+
+
+-- 3.2016年历史数据市场推广费用处理
+START TRANSACTION;
+
+USE temp_data;
+
+DROP TABLE
+IF EXISTS mkt_history_month;
+
+CREATE TABLE mkt_history_month AS SELECT
+	tt.mkt_month,
+	tt.mkt_type,
+	tt.shop_name,
+	tt.mkt_total,
+	tt.mkt_fee
+FROM
+	(
+		(
+			SELECT
+				CONCAT(
+					LEFT(DATE_FORMAT(tt.年月, "%Y-%m-%d"),8),
+					"01"
+				) AS mkt_month,
+				(
+					CASE
+					WHEN tt.年月 IS NOT NULL THEN
+						"tbk"
+					ELSE
+						''
+					END
+				) AS mkt_type,
+				(
+					CASE
+					WHEN tt.年月 IS NOT NULL THEN
+						"碧生源官方旗舰店"
+					ELSE
+						''
+					END
+				) AS shop_name,
+				ROUND(
+					sum(
+						CASE
+						WHEN tt.推广工具 = "共计" THEN
+							tt.消耗
+						ELSE
+							0
+						END
+					),
+					2
+				) AS mkt_total,
+				ROUND(
+					sum(
+						CASE
+						WHEN tt.推广工具 = "淘宝客" THEN
+							tt.消耗
+						ELSE
+							0
+						END
+					),
+					2
+				) AS mkt_fee
+			FROM
+				master_data.mkt_history_data tt
+			GROUP BY
+				mkt_month,
+				mkt_type,
+				shop_name
+			ORDER BY
+				mkt_month,
+				mkt_type,
+				shop_name
+		)
+		UNION
+			(
+				SELECT
+					CONCAT(
+					LEFT(DATE_FORMAT(tt.年月, "%Y-%m-%d"),8),
+					"01"
+				) AS mkt_month,
+					(
+						CASE
+						WHEN tt.年月 IS NOT NULL THEN
+							"ztc"
+						ELSE
+							0
+						END
+					) AS mkt_type,
+					(
+						CASE
+						WHEN tt.年月 IS NOT NULL THEN
+							"碧生源官方旗舰店"
+						ELSE
+							0
+						END
+					) AS shop_name,
+					ROUND(
+						sum(
+							CASE
+							WHEN tt.推广工具 = "共计" THEN
+								tt.消耗
+							ELSE
+								0
+							END
+						),
+						2
+					) AS mkt_total,
+					ROUND(
+						sum(
+							CASE
+							WHEN tt.推广工具 = "直通车" THEN
+								tt.消耗
+							ELSE
+								0
+							END
+						),
+						2
+					) AS mkt_fee
+				FROM
+					master_data.mkt_history_data tt
+				GROUP BY
+					mkt_month,
+					mkt_type,
+					shop_name
+				ORDER BY
+					mkt_month,
+					mkt_type,
+					shop_name
+			)
+		UNION
+			(
+				SELECT
+					CONCAT(
+					LEFT(DATE_FORMAT(tt.年月, "%Y-%m-%d"),8),
+					"01"
+				) AS mkt_month,
+					(
+						CASE
+						WHEN tt.年月 IS NOT NULL THEN
+							"zz"
+						ELSE
+							0
+						END
+					) AS mkt_type,
+					(
+						CASE
+						WHEN tt.年月 IS NOT NULL THEN
+							"碧生源官方旗舰店"
+						ELSE
+							0
+						END
+					) AS shop_name,
+					ROUND(
+						sum(
+							CASE
+							WHEN tt.推广工具 = "共计" THEN
+								tt.消耗
+							ELSE
+								0
+							END
+						),
+						2
+					) AS mkt_total,
+					ROUND(
+						sum(
+							CASE
+							WHEN LEFT (tt.推广工具, 2) = "钻展" THEN
+								tt.消耗
+							ELSE
+								0
+							END
+						),
+						2
+					) AS mkt_fee
+				FROM
+					master_data.mkt_history_data tt
+				GROUP BY
+					mkt_month,
+					mkt_type,
+					shop_name
+				ORDER BY
+					mkt_month,
+					mkt_type,
+					shop_name
+			)
+		UNION
+			(
+				SELECT
+					CONCAT(
+					LEFT(DATE_FORMAT(tt.年月, "%Y-%m-%d"),8),
+					"01"
+				) AS mkt_month,
+					(
+						CASE
+						WHEN tt.年月 IS NOT NULL THEN
+							'zw'
+						ELSE
+							''
+						END
+					) AS mkt_type,
+					(
+						CASE
+						WHEN tt.年月 IS NOT NULL THEN
+							'碧生源官方旗舰店'
+						ELSE
+							''
+						END
+					) AS shop_name,
+					ROUND(
+						sum(
+							CASE
+							WHEN tt.推广工具 = "共计" THEN
+								tt.消耗
+							ELSE
+								0
+							END
+						),
+						2
+					) AS mkt_total,
+					ROUND(
+						sum(
+							CASE
+							WHEN LEFT (tt.推广工具, 2) = "站外" THEN
+								tt.消耗
+							ELSE
+								0
+							END
+						),
+						2
+					) AS mkt_fee
+				FROM
+					master_data.mkt_history_data tt
+				GROUP BY
+					mkt_month,
+					mkt_type,
+					shop_name
+				ORDER BY
+					mkt_month,
+					mkt_type,
+					shop_name
+			)
+	)tt;
+
+-- 3.以月为时间单位对2016年和2017年的市场推广数据进行合并，现将2017年byday的市场推广数据转化为bymonth的
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS market_plan_month;
+CREATE TABLE market_plan_month AS
+SELECT
+t3.mkt_month,
+t3.shop_name,
+t3.mkt_type,
+t3.mkt_fee,
+t3.mkt_total
+FROM(
+(SELECT
+t1.mkt_month,
+t1.shop_name,
+t1.mkt_type,
+t1.mkt_fee,
+t2.mkt_total
+FROM
+(SELECT
+ CONCAT(DATE_FORMAT(tt.mkt_time,"%Y-%m"),"-01") as mkt_month,
+ tt.mkt_type AS mkt_type,
+ tt.shop_name AS shop_name,
+ ROUND(sum(tt.mkt_fee),2) AS mkt_fee
+FROM
+ market_product_day tt
+GROUP BY
+ mkt_month,
+ mkt_type,
+ shop_name) t1
+LEFT JOIN
+(SELECT
+ CONCAT(DATE_FORMAT(tt.mkt_time,"%Y-%m"),"-01") as mkt_month,
+ tt.shop_name AS shop_name,
+ ROUND(sum(tt.mkt_fee),2) AS mkt_total
+FROM
+ market_product_day tt
+GROUP BY
+ mkt_month,
+ shop_name) t2
+ON  CONCAT(t1.mkt_month,t1.shop_name)=CONCAT(t2.mkt_month,t2.shop_name))
+UNION
+(SELECT
+ tt.mkt_month,
+ tt.shop_name,
+ tt.mkt_type,
+ tt.mkt_fee,
+ tt.mkt_total
+FROM temp_data.mkt_history_month tt))t3
+ORDER BY
+t3.mkt_month,
+t3.shop_name,
+t3.mkt_type;
+
+
