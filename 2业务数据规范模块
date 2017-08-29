@@ -1,0 +1,147 @@
+-- 1.创建2016年-2017年交易基础数据集,通过事件处理，数据标准自动化处理,2016年08-09月部分减肥
+-- AUTHORS:panying
+START TRANSACTION;
+
+USE temp_data;
+
+
+SET @rownum = 0;
+
+DROP TABLE
+IF EXISTS trans_data_temp;
+
+CREATE TABLE trans_data_temp (
+	transdata_id INT NOT NULL,
+	店铺名称 VARCHAR (50) NULL,
+	外部平台单号 VARCHAR (50) NULL,
+	订单编号 VARCHAR (50) NULL,
+	套装明细编号 VARCHAR (50) NULL,
+	产品明细编号 VARCHAR (50) NULL,
+	品牌 VARCHAR (50) NULL,
+	规格 VARCHAR (50) NULL,
+	条形码 VARCHAR (50) NULL,
+	品名 VARCHAR (50) NULL,
+	产品编号 VARCHAR (50) NULL,
+	市场价 VARCHAR (50) NULL,
+	零售价 VARCHAR (50) NULL,
+	收货人 VARCHAR (50) NULL,
+	收货手机 VARCHAR (50) NULL,
+	买家ID VARCHAR (50) NULL,
+	实收参考价 VARCHAR (50) NULL,
+	省 VARCHAR (50) NULL,
+	市 VARCHAR (50) NULL,
+	区 VARCHAR (50) NULL,
+	快递公司 VARCHAR (50) NULL,
+	快递单号 VARCHAR (50) NULL,
+	签收时间 VARCHAR (50) NULL,
+	订货时间 VARCHAR (50) NULL,
+	订货日期 VARCHAR (50) NULL,
+	付款时间 VARCHAR (50) NULL,
+	付款日期 VARCHAR (50) NULL,
+	发货时间 VARCHAR (50) NULL,
+	发货日期 VARCHAR (50) NULL,
+	成交单价 VARCHAR (50) NULL,
+	产品类型 VARCHAR (50) NULL,
+	订货数量sum VARCHAR (50) NULL,
+	产品销售总价sum VARCHAR (50) NULL,
+	渠道类型 VARCHAR (50) NULL,
+	产品成本价 VARCHAR (50) NULL,
+	赠品成本价 VARCHAR (50) NULL,
+	商品类型 VARCHAR (50) NULL,
+	PRIMARY KEY (transdata_id)
+) ENGINE = INNODB; -- 创建业务数据基础表，规范数据格式，并优化数据结构，匹配相关类型表
+
+INSERT INTO trans_data_temp (
+	transdata_id,
+	店铺名称,
+	外部平台单号,
+	订单编号,
+	套装明细编号,
+	产品明细编号,
+	品牌,
+	规格,
+	条形码,
+	品名,
+	产品编号,
+	市场价,
+	零售价,
+	收货人,
+	收货手机,
+	买家ID,
+	实收参考价,
+	省,
+	市,
+	区,
+	快递公司,
+	快递单号,
+	签收时间,
+	订货时间,
+	订货日期,
+	付款时间,
+	付款日期,
+	发货时间,
+	发货日期,
+	成交单价,
+	产品类型,
+	订货数量sum,
+	产品销售总价sum,
+	渠道类型,
+	产品成本价,
+	赠品成本价,
+	商品类型
+) SELECT -- 为数据插入主键数据
+	@rownum :=@rownum + 1,
+	tt.店铺名称,
+	tt.外部平台单号,
+	tt.订单编号,
+	tt.套装明细编号,
+	tt.产品明细编号,
+	tt.品牌,
+	tt.规格,
+	tt.条形码,
+	tt.品名,
+	tt.产品编号,
+	tt.市场价,
+	tt.零售价,
+	tt.收货人,
+	tt.收货手机,
+	tt.买家ID,
+	tt.实收参考价,
+	tt.省,
+	tt.市,
+	tt.区,
+	tt.快递公司,
+	tt.快递单号,
+	tt.签收时间,
+	tt.订货时间,
+	tt.订货日期,
+	tt.付款时间,
+	tt.付款日期,
+	tt.发货时间,
+	tt.发货日期,
+	tt.成交单价,
+	tt.产品类型,
+	tt.订货数量sum,
+	tt.产品销售总价sum,
+	tl.渠道类型,
+	t1.成本价,
+	t2.单价,
+(
+		CASE
+		WHEN tt.产品销售总价sum > 0 THEN
+			'产品'
+		ELSE
+			'赠品'
+		END
+	) AS 商品类型
+FROM
+	master_data.mas_trans_data tt
+LEFT JOIN master_data.std_channel tl ON tt.店铺名称 = tl.店铺名称
+LEFT JOIN master_data.std_product_price t1 ON tt.条形码 = t1.条形码
+LEFT JOIN master_data.std_gifts_price t2 ON tt.条形码 = t2.ERP建码
+WHERE
+	YEAR (tt.发货日期) > 2015
+AND tl.渠道类型 IN ('零售', '渠道');
+
+
+
