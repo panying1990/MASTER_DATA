@@ -1,0 +1,1152 @@
+-- 利润分析，全部用于利润数据处理
+-- AUTHORS:PANYING
+-- 创建用于产品类型划分利润率的基础数据集，主要策略为实际销售订单中销售金额最高的产品作为该订单的订单产品、订单条形码
+START TRANSACTION;
+USE temp_data;
+SET @rownum=1;
+DROP TABLE 
+IF exists profit_product_temp;
+CREATE TABLE profit_product_temp(
+	rownum NUMERIC (20, 0) NULL,
+	cluster NUMERIC (20, 2) NULL,
+	发货日期 VARCHAR (50) NULL,
+	渠道类型 VARCHAR (50) NULL,
+	店铺名称 VARCHAR (50) NULL,
+	订单编号 VARCHAR (50) NULL,
+  订单类型 VARCHAR (50) NULL,
+	品牌 VARCHAR (50) NULL,
+	品名 VARCHAR (50) NULL,
+	条形码 VARCHAR (50) NULL,
+	产品销售总价sum VARCHAR (50) NULL,
+	订货数量sum VARCHAR (50) NULL,
+	产品成本价 VARCHAR (50) NULL,
+	赠品成本价 VARCHAR (50) NULL,
+  PRIMARY KEY(rownum)
+)ENGINE=innodb;
+INSERT INTO profit_product_temp (
+	rownum,
+	cluster,
+	发货日期,
+	渠道类型,
+	店铺名称,
+	订单编号,
+  订单类型,
+	品牌,
+	品名,
+	条形码,
+	产品销售总价sum,
+	订货数量sum,
+	产品成本价,
+	赠品成本价
+)SELECT
+	@rownum:=@rownum+1 AS rownum,
+	(CASE WHEN tt.商品类型='产品' THEN tt.产品成本价 ELSE 0 END) AS order_cluster,
+	tt.发货日期,
+	tt.渠道类型,
+	tt.店铺名称,
+	tt.订单编号,
+  (CASE WHEN tt.产品销售总价sum<5 THEN '赠品订单' ELSE '产品订单' END) AS 订单类型,
+	tt.品牌,
+	tt.品名,
+	tt.条形码,
+	tt.产品销售总价sum,
+	tt.订货数量sum,
+	tt.产品成本价,
+	tt.赠品成本价
+FROM temp_data.trans_data_temp tt
+ORDER BY
+  tt.发货日期,
+  tt.订单编号;
+
+-- 2 创建用于产品类型划分利润率的基础数据集，主要策略为实际销售订单中销售金额最高的产品作为该订单的订单产品、订单条形码
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE 
+IF exists profit_product_details;
+CREATE TABLE profit_product_details
+(rownum NUMERIC (20, 0) NULL,
+ 发货日期 VARCHAR (50) NULL,
+ 渠道类型 VARCHAR (50) NULL,
+ 店铺名称 VARCHAR (50) NULL,
+ 订单编号 VARCHAR (50) NULL,
+ 订单类型 VARCHAR (50) NULL,
+ 品牌 VARCHAR (50) NULL,
+ 品名 VARCHAR (50) NULL,
+ 条形码 VARCHAR (50) NULL,
+ 产品销售总价sum VARCHAR (50) NULL,
+ 订货数量sum VARCHAR (50) NULL,
+ 产品成本价 VARCHAR (50) NULL,
+ 赠品成本价 VARCHAR (50) NULL,
+ 订单品名 VARCHAR (50) NULL,
+ 订单条形码 VARCHAR (50) NULL
+);
+INSERT INTO profit_product_details
+( rownum,
+	发货日期,
+	渠道类型,
+	店铺名称,
+	订单编号,
+  订单类型,
+	品牌,
+	品名,
+	条形码,
+	产品销售总价sum,
+	订货数量sum,
+	产品成本价,
+	赠品成本价,
+	订单品名,
+	订单条形码
+)SELECT
+ tt.rownum,
+ tt.发货日期,
+ tt.渠道类型,
+ tt.店铺名称,
+ tt.订单编号,
+ tt.订单类型,
+ tt.品牌,
+ tt.品名,
+ tt.条形码,
+ tt.产品销售总价sum,
+ tt.订货数量sum,
+ tt.产品成本价,
+ tt.赠品成本价,
+ (CASE WHEN ISNULL(td.品名) THEN '赠品' ELSE td.品名 END) AS order_proname,
+ (CASE WHEN ISNULL(td.条形码) THEN '12306' ELSE td.条形码 END)  AS order_procode
+FROM
+	 temp_data.profit_product_temp tt
+LEFT JOIN
+(SELECT
+		tt.订单编号,
+		tt.品牌,
+		tt.品名,
+		tt.条形码
+	FROM
+		temp_data.profit_product_temp tt
+	LEFT JOIN (
+		SELECT
+			tb.订单编号,
+			MIN(tb.rownum) AS min_rownum
+		FROM
+			(
+				SELECT
+					tt.订单编号,
+					tt.rownum
+				FROM
+					temp_data.profit_product_temp tt
+				LEFT JOIN (
+					SELECT
+            tt.订单类型,
+						tt.订单编号,
+						MAX(tt.cluster) AS max_cluster
+					FROM
+						temp_data.profit_product_temp tt
+					GROUP BY
+            tt.订单类型,
+						tt.订单编号
+          ORDER BY
+            tt.订单类型,
+            max_cluster DESC
+				) ta ON tt.订单编号 = ta.订单编号
+				WHERE
+					tt.cluster = ta.max_cluster AND ta.订单类型='产品订单'
+        ORDER BY
+					tt.订单编号,
+          tt.rownum
+			) tb
+		GROUP BY
+			tb.订单编号
+    ORDER BY
+      tb.订单编号
+	) tc ON tt.订单编号 = tc.订单编号
+	WHERE
+		tt.rownum = tc.min_rownum
+) td ON tt.订单编号 = td.订单编号
+ORDER BY
+	tt.rownum;
+
+-- 2 将2016年08月-09月商品重置为赠品属性
+USE temp_data;
+DROP TABLE
+IF EXISTS trans_data_tempnew;
+CREATE TABLE trans_data_tempnew SELECT * FROM trans_data_temp;
+START TRANSACTION;
+UPDATE trans_data_tempnew
+SET 产品成本价 = 0
+WHERE 条形码 IN('6931183900341','6931183900921')AND CONCAT(LEFT(DATE_FORMAT(发货时间, "%Y-%m-%d"),8),'01') IN('2016-08-01','2016-09-01');
+ROLLBACK;
+-- 为利润分析添加产品成本、赠品成本最小颗粒度数据汇总
+USE temp_data;
+DROP TABLE
+IF EXISTS trans_temp_cost;
+CREATE TABLE trans_temp_cost AS SELECT
+	DATE_FORMAT(tt.发货日期,"%Y-%m-%d") as profit_de_date,
+  tt.渠道类型 as channel_type,
+  tt.店铺名称 as shop_name,
+  tt.品牌 as brand_name,
+  tt.品名 AS product_name,
+  tt.条形码 as product_code,
+  tt.产品成本价 as product_price,
+  tt.赠品成本价 as gift_price,
+  tt.产品销售总价sum as sale_sum,
+  tt.订单编号,
+  tt.订货数量sum,
+  tt.买家ID,
+  (tt.产品成本价*tt.订货数量sum)as product_fee,
+  (tt.赠品成本价*tt.订货数量sum)as gift_fee
+FROM
+	temp_data.trans_data_tempnew tt;
+
+-- 1.3.1 为利润分析添加平台服务费率前期准备
+START TRANSACTION;
+UPDATE trans_temp_cost tt
+SET tt.shop_name = CONCAT('z_',tt.shop_name)
+WHERE CONCAT('z_',tt.shop_name) IN (SELECT
+  tt.店铺名称 
+FROM master_data.std_distributor_ratio tt
+WHERE LEFT(tt.店铺名称,2)='z_') AND DATE_FORMAT(tt.profit_de_date,"%Y")=2016;
+ROLLBACK;
+-- 获得利润分析中不同销售平台服务费
+DROP TABLE
+IF EXISTS cost_temp_shopname;
+CREATE TABLE cost_temp_shopname AS SELECT
+	tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  tt.brand_name,
+  tt.product_code,
+  tt.product_name,
+  tt.product_price,
+  tt.gift_price,
+  tt.sale_sum,
+  tt.订单编号,
+  tt.订货数量sum,
+  tt.买家ID,
+  tt.product_fee,
+  tt.gift_fee,
+  tt.shop_ratio,
+  (CASE WHEN tt.sale_sum>0 then tt.sale_sum*tt.shop_ratio else 0 end) as shopname_fee
+FROM
+	(SELECT
+	tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  tt.brand_name,
+  tt.product_code,
+  tt.product_name,
+  tt.product_price,
+  tt.gift_price,
+  tt.sale_sum,
+  tt.订单编号,
+  tt.订货数量sum,
+  tt.买家ID,
+  tt.product_fee,
+  tt.gift_fee,
+  tl.渠道折扣 as shop_ratio
+FROM
+	trans_temp_cost tt
+LEFT JOIN
+  master_data.std_distributor_ratio tl
+ON
+  tt.shop_name=tl.店铺名称) tt;
+
+
+-- ---------------------------零售渠道模块-----------------------------------------
+-- 此部分将数据进行汇总合并成，输出利润分析报表中零售分析部分
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_reta_cost_month;
+
+CREATE TABLE profit_reta_cost_month AS 
+SELECT
+  CONCAT(DATE_FORMAT(tt.profit_de_date,"%Y-%m"),"-01") as profit_de_month,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  ROUND(sum(CASE WHEN ISNULL(tt.shop_sale) THEN 0 ELSE tt.shop_sale END),2) as shop_sale,
+  ROUND(sum(CASE WHEN ISNULL(tt.shop_order_num) THEN 0 ELSE tt.shop_order_num END),2) as shop_order_num, 
+  ROUND(sum(CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE tt.gift_fee END),2) as gift_fee,
+  ROUND(sum(CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE tt.product_fee END),2) as product_fee,
+  ROUND(sum(CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE tt.shopname_fee END),2) as shopname_fee,
+  ROUND(sum(CASE WHEN ISNULL(tt.delivery_fee) THEN 0 ELSE tt.delivery_fee END),2) as delivery_fee
+FROM(SELECT
+	DATE_FORMAT(
+		tt.profit_de_date,
+		"%Y-%m-%d"
+	) AS profit_de_date,
+	tt.channel_type AS channel_type,
+	tt.shop_name AS shop_name,
+	tt.shop_sale AS shop_sale,
+	tt.shop_order_num AS shop_order_num,
+	tt.gift_fee AS gift_fee,
+	tt.product_fee AS product_fee,
+	tt.shopname_fee AS shopname_fee,
+	(tt.shop_order_num * 5.7) AS delivery_fee
+FROM
+	(
+		SELECT
+			DATE_FORMAT(
+				tt.profit_de_date,
+				"%Y-%m-%d"
+			) AS profit_de_date,
+			tt.channel_type AS channel_type,
+			tt.shop_name AS shop_name,
+			sum(tt.sale_sum) AS shop_sale,
+			COUNT(DISTINCT tt.订单编号) AS shop_order_num,
+			sum(tt.gift_fee) AS gift_fee,
+			sum(tt.product_fee) AS product_fee,
+			sum(tt.shopname_fee) AS shopname_fee
+		FROM
+			temp_data.cost_temp_shopname tt
+		GROUP BY
+			profit_de_date,
+			channel_type,
+			shop_name
+		HAVING
+			tt.channel_type = '零售'
+		ORDER BY
+			profit_de_date,
+			channel_type,
+			shop_name
+	) tt
+GROUP BY
+	profit_de_date,
+	channel_type,
+	shop_name
+HAVING
+	tt.channel_type = '零售'
+ORDER BY
+	profit_de_date,
+	channel_type,
+	shop_name
+) tt
+GROUP BY
+  profit_de_month,
+  channel_type,
+  shop_name
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_month,
+  channel_type,
+  shop_name;
+
+--  此部分汇合mkt_month数据，并输出BY 渠道-平台类型的月度数据
+USE bsy_business;
+DROP TABLE
+IF EXISTS profit_reta_month;
+CREATE TABLE profit_reta_month AS SELECT
+  DATE_FORMAT(tt.profit_de_month,"%Y-%m-%d") as profit_de_month,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  ROUND(tt.shop_sale,2) as shop_sale,
+  ROUND(tt.shop_order_num,2) as shop_order_num, 
+  ROUND(tt.gift_fee,2) as gift_fee,
+  ROUND(tt.product_fee,2) as product_fee,
+  ROUND(tt.shopname_fee,2) as shopname_fee,
+  ROUND(tt.delivery_fee,2) as delivery_fee,
+  ROUND(tt.mkt_fee,2) as mkt_fee,
+  ROUND((tt.shop_sale-tt.product_fee-tt.gift_fee-tt.delivery_fee-tt.shopname_fee-tt.mkt_fee),2) as reta_profit
+FROM
+(SELECT
+  tt.profit_de_month,
+  tt.channel_type,
+  tt.shop_name,
+  tt.shop_sale,
+  tt.shop_order_num, 
+  tt.gift_fee,
+  tt.product_fee,
+  tt.shopname_fee,
+  tt.delivery_fee,
+  (CASE WHEN ISNULL(ta.mkt_fee) THEN 0 ELSE ta.mkt_fee END) as mkt_fee
+FROM
+	temp_data.profit_reta_cost_month tt
+LEFT JOIN 
+(SELECT 
+tt.mkt_month,
+tt.shop_name,
+SUM(tt.mkt_fee)AS mkt_fee 
+FROM bsy_business.market_plan_month tt
+GROUP BY
+tt.mkt_month,
+tt.shop_name)ta
+ON CONCAT(tt.profit_de_month,tt.shop_name)=CONCAT(ta.mkt_month,ta.shop_name)
+GROUP BY
+  profit_de_month,
+  channel_type,
+  shop_name
+HAVING
+  tt.channel_type='零售' 
+ORDER BY
+  profit_de_month,
+  channel_type, 
+  shop_name)tt;
+
+-- 获得零售渠道利润率划分到每天的数据基础表
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_reta_cost_day;
+
+CREATE TABLE profit_reta_cost_day AS SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  sum(CASE WHEN ISNULL(tt.shop_sale) THEN 0 ELSE tt.shop_sale END) as shop_sale,
+  sum(CASE WHEN ISNULL(tt.shop_order_num) THEN 0 ELSE tt.shop_order_num END) as shop_order_num, 
+  sum(CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE tt.gift_fee END) as gift_fee,
+  sum(CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE tt.product_fee END) as product_fee,
+  sum(CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE tt.shopname_fee END) as shopname_fee,
+  ROUND(sum(tt.delivery_fee),2) as delivery_fee
+FROM(
+SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  tt.shop_sale as shop_sale,
+  tt.shop_order_num as shop_order_num, 
+  tt.gift_fee as gift_fee,
+  tt.product_fee as product_fee,
+  tt.shopname_fee as shopname_fee,
+  (tt.shop_order_num*5.7)as delivery_fee
+FROM
+	(SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  sum(tt.sale_sum) as shop_sale,
+  COUNT(DISTINCT tt.订单编号) as shop_order_num, 
+  sum(tt.gift_fee) as gift_fee,
+  sum(tt.product_fee) as product_fee,
+  sum(tt.shopname_fee) as shopname_fee
+FROM
+	temp_data.cost_temp_shopname tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  shop_name
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  shop_name) tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  shop_name
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  shop_name) tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  shop_name
+HAVING
+  tt.channel_type='零售' AND DATE_FORMAT(profit_de_date,"%Y")=2017
+ORDER BY
+  profit_de_date,
+  channel_type,
+  shop_name;
+
+-- 2.2.2、此部分汇合market_product_day数据，并输出BY 渠道-平台类型的日度数据
+USE bsy_business;
+DROP TABLE
+IF EXISTS profit_reta_day;
+
+CREATE TABLE profit_reta_day AS SELECT
+  tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  ROUND(tt.shop_sale,2) as shop_sale,
+  ROUND(tt.shop_order_num,2) as shop_order_num, 
+  ROUND(tt.gift_fee,2) as gift_fee,
+  ROUND(tt.product_fee,2) as product_fee,
+  ROUND(tt.shopname_fee,2) as shopname_fee,
+  ROUND(tt.delivery_fee,2) as delivery_fee,
+  ROUND(tt.mkt_fee,2)as mkt_fee,
+  ROUND((tt.shop_sale-tt.gift_fee-tt.product_fee-tt.shopname_fee-delivery_fee-tt.mkt_fee),2) as reta_profit
+FROM
+(SELECT
+  tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  ROUND(tt.shop_sale,2) as shop_sale,
+  ROUND(tt.shop_order_num,2) as shop_order_num, 
+  ROUND(tt.gift_fee,2) as gift_fee,
+  ROUND(tt.product_fee,2) as product_fee,
+  ROUND(tt.shopname_fee,2) as shopname_fee,
+  ROUND(tt.delivery_fee,2) as delivery_fee,
+  ROUND(tl.mkt_fee,2)as mkt_fee
+FROM
+	temp_data.profit_reta_cost_day tt
+LEFT JOIN 
+(SELECT
+ DATE_FORMAT(tt.mkt_time,"%Y-%m-%d") AS mkt_time,
+ tt.shop_name AS shop_name,
+ sum(tt.mkt_fee) AS mkt_fee
+ FROM
+ bsy_business.market_product_day tt
+ GROUP BY
+ mkt_time,
+ shop_name)tl ON CONCAT(tt.profit_de_date,tt.shop_name)=CONCAT(tl.mkt_time,tl.shop_name)
+GROUP BY
+  profit_de_date,
+  channel_type,
+  shop_name
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  shop_name) tt;
+
+-- -------------------------------------------------渠道模块--------------------------------------------------
+-- 此部分将渠道利润数据进行合并，并形成by月度以及by日度的，完成全部订单数据内部转化报表,BY 渠道-平台类型
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_dist_cost_day;
+CREATE TABLE profit_dist_cost_day AS 
+SELECT
+  tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  tt.user_ID,
+  tt.shop_sale,
+  tt.shop_order_num, 
+  ROUND((CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE  tt.product_fee END),2) as product_fee,
+  ROUND((CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE  tt.gift_fee END),2) as gift_fee,
+  ROUND((CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE  tt.shopname_fee END),2) as shopname_fee,
+  ROUND((CASE WHEN ISNULL(tt.shop_sale) THEN 0 ELSE  tt.shopname_fee*0.0009 END),2) as delivery_fee
+FROM
+  (SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  tt.买家ID as user_ID,
+  sum(tt.sale_sum) as shop_sale,
+  COUNT(DISTINCT tt.订单编号) as shop_order_num, 
+  sum(CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE  tt.product_fee END ) as product_fee,
+  sum(CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE tt.gift_fee END ) as gift_fee,
+  sum(CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE  tt.shopname_fee END ) as shopname_fee
+FROM
+	temp_data.cost_temp_shopname tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  shop_name,
+  user_ID
+HAVING
+  tt.channel_type='渠道'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  shop_name,
+  user_ID)tt;
+
+-- 3.1.2对渠道-费用数据做进一步处理,将其转变为相应店铺名称的shopname_fee,并完善数据组合
+START TRANSACTION;
+USE temp_data;
+UPDATE profit_dist_cost_day tt LEFT JOIN master_data.std_shopnamefee_id tl ON tt.user_ID=tl.买家ID
+SET 
+  tt.shop_name=tl.店铺名称,
+  tt.shopname_fee =(CASE WHEN (tt.gift_fee+tt.product_fee>0) THEN tt.gift_fee+tt.product_fee ELSE tt.shop_sale END),
+  tt.gift_fee = 0,
+  tt.product_fee = 0,
+  tt.shop_sale = 0
+WHERE tt.shop_name="渠道-费用";
+ROLLBACK;
+START TRANSACTION;
+UPDATE profit_dist_cost_day tt
+SET tt.shop_name = SUBSTR(tt.shop_name,3)
+WHERE LEFT(tt.shop_name,1)="z";
+ROLLBACK;
+-- 3.1.3 对渠道-费用数据做进一步处理,将其转变为相应店铺名称的shopname_fee,并完善数据组合
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS profit_dist_month;
+CREATE TABLE profit_dist_month AS 
+SELECT
+  tt.profit_de_month,
+  tt.channel_type,
+  tt.shop_name,
+  round(tt.shop_sale,2) as shop_sale,
+  round(tt.shop_order_num,2) as shop_order_num,
+  round(tt.product_fee,2) as product_fee,
+  round(tt.gift_fee,2) as gift_fee,
+  round(tt.shopname_fee,2) as shopname_fee,
+  round(delivery_fee,2) as delivery_fee,
+  ROUND((tt.shop_sale-tt.product_fee-tt.gift_fee-tt.shopname_fee-tt.delivery_fee),2) as dist_profit
+FROM(
+  SELECT
+  CONCAT(DATE_FORMAT(ta.profit_de_date,"%Y-%m"),"-01") as profit_de_month,
+  ta.channel_type,
+  ta.shop_name,
+  SUM(ta.shop_sale) as shop_sale,
+  SUM(ta.shop_order_num) as shop_order_num,
+  SUM(ta.product_fee) as product_fee,
+  SUM(ta.gift_fee) as gift_fee,
+  SUM(ta.shopname_fee) as shopname_fee,
+  SUM(delivery_fee) as delivery_fee
+  FROM
+  temp_data.profit_dist_cost_day ta
+  GROUP BY
+  profit_de_month,
+  ta.channel_type,
+  ta.shop_name) tt
+GROUP BY
+  profit_de_month,
+  tt.channel_type,
+  tt.shop_name
+ORDER BY
+  profit_de_month,
+  tt.channel_type,
+  tt.shop_name;
+
+-- ---------------------------------------用于分产品的利润分析数据处理-----------------------------------------------#
+START TRANSACTION;
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_product_cost;
+CREATE TABLE profit_product_cost AS SELECT
+	DATE_FORMAT(tt.发货日期,"%Y-%m-%d") as profit_de_date,
+  tt.渠道类型 as channel_type,
+  tt.店铺名称 as shop_name,
+  tt.`订单品名` as order_proname,
+  tt.`订单条形码` AS order_procode,
+  tt.品牌 as brand_name,
+  tt.品名 AS product_name,
+  tt.条形码 as product_code,
+  tt.产品成本价 as product_price,
+  tt.赠品成本价 as gift_price,
+  tt.产品销售总价sum as sale_sum,
+  tt.订单编号,
+  tt.订货数量sum,
+  (tt.产品成本价*tt.订货数量sum)as product_fee,
+  (tt.赠品成本价*tt.订货数量sum)as gift_fee
+FROM
+	bsy_business.profit_product_details tt;
+ROLLBACK;
+-- 1.3.1 为利润分析添加平台服务费率前期准备
+START TRANSACTION;
+USE temp_data;
+UPDATE profit_product_cost tt
+SET tt.shop_name = CONCAT('z_',tt.shop_name)
+WHERE CONCAT('z_',tt.shop_name) IN (SELECT
+  tt.店铺名称 
+FROM master_data.std_distributor_ratio tt
+WHERE LEFT(tt.店铺名称,2)='z_') AND DATE_FORMAT(tt.profit_de_date,"%Y")=2016;
+ROLLBACK;
+-- 1.3.2 获得利润分析中不同销售平台服务费
+START TRANSACTION;
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_proshopname;
+CREATE TABLE profit_proshopname AS SELECT
+	tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  tt.order_proname,
+  tt.order_procode,
+  tt.brand_name,
+  tt.product_code,
+  tt.product_name,
+  tt.product_price,
+  tt.gift_price,
+  tt.sale_sum,
+  tt.订单编号,
+  tt.订货数量sum,
+  tt.product_fee,
+  tt.gift_fee,
+  tt.shop_ratio,
+  (CASE WHEN tt.sale_sum>0 then tt.sale_sum*tt.shop_ratio else 0 end) as shopname_fee
+FROM
+	(SELECT
+	tt.profit_de_date,
+  tt.channel_type,
+  tt.shop_name,
+  tt.order_proname,
+  tt.order_procode,
+  tt.brand_name,
+  tt.product_code,
+  tt.product_name,
+  tt.product_price,
+  tt.gift_price,
+  tt.sale_sum,
+  tt.订单编号,
+  tt.订货数量sum,
+  tt.product_fee,
+  tt.gift_fee,
+  tl.渠道折扣 as shop_ratio
+FROM
+	temp_data.profit_product_cost tt
+LEFT JOIN
+  master_data.std_distributor_ratio tl
+ON
+  tt.shop_name=tl.店铺名称) tt;
+
+-- --------------------------------------------------零售模块------------------------------------------------
+-- 此部分将数据进行汇总合并成月，完成全部订单数据内部转化报表,BY 产品类型
+START TRANSACTION;
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_reta_product_month;
+
+CREATE TABLE profit_reta_product_month AS SELECT
+  CONCAT(DATE_FORMAT(tt.profit_de_date,"%Y-%m"),"-01") as profit_de_month,
+  tt.channel_type as channel_type,
+  tt.order_procode as order_procode,
+  ROUND(sum(CASE WHEN ISNULL(tt.pro_sale) THEN 0 ELSE tt.pro_sale END),2) as pro_sale,
+  ROUND(sum(CASE WHEN ISNULL(tt.pro_order_num) THEN 0 ELSE tt.pro_order_num END),2) as pro_order_num, 
+  ROUND(sum(CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE tt.gift_fee END),2) as gift_fee,
+  ROUND(sum(CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE tt.product_fee END),2) as product_fee,
+  ROUND(sum(CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE tt.shopname_fee END),2) as shopname_fee,
+  ROUND(sum(CASE WHEN ISNULL(tt.delivery_fee) THEN 0 ELSE tt.delivery_fee END),2) as delivery_fee
+FROM(
+SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.order_procode as order_procode,
+  tt.pro_sale as pro_sale,
+  tt.pro_order_num as pro_order_num, 
+  tt.gift_fee as gift_fee,
+  tt.product_fee as product_fee,
+  tt.shopname_fee as shopname_fee,
+  (tt.pro_order_num*5.7)as delivery_fee
+FROM
+	(SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.order_procode as order_procode,
+  sum(tt.sale_sum) as pro_sale,
+  COUNT(DISTINCT tt.订单编号) as pro_order_num, 
+  sum(tt.gift_fee) as gift_fee,
+  sum(tt.product_fee) as product_fee,
+  sum(tt.shopname_fee) as shopname_fee
+FROM
+	profit_proshopname tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  order_procode
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  order_procode) tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  order_procode
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  order_procode) tt
+GROUP BY
+  profit_de_month,
+  channel_type,
+  order_procode
+HAVING
+  channel_type='零售' AND DATE_FORMAT(profit_de_month,"%Y")=2017;
+ROLLBACK;
+-- 将为空的产品列表定义为12307，该编码作为无法识别产品编号
+START TRANSACTION;
+USE temp_data;
+UPDATE profit_reta_product_month tt
+SET  tt.order_procode=12307
+WHERE ISNULL(tt.order_procode);
+ROLLBACK;
+-- 2.1.2、此部分汇合mkt_month数据，并输出BY 渠道-平台类型的月度数据
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS profit_retaproduct_month;
+CREATE TABLE profit_retaproduct_month AS
+SELECT
+ta.profit_de_month,
+ta.channel_type,
+ta.order_procode,
+ta.pro_sale,
+ta.pro_order_num,
+ta.gift_fee,
+ta.product_fee,
+ta.shopname_fee,
+ta.delivery_fee,
+ta.mkt_fee_pro,
+ta.mkt_fee_tol,
+(CASE WHEN ISNULL(tb.品名) THEN "其他" ELSE tb.品名 END) AS product_name
+FROM
+(SELECT
+ta.profit_de_month,
+ta.channel_type,
+ta.order_procode,
+ta.pro_sale,
+ta.pro_order_num,
+ta.gift_fee,
+ta.product_fee,
+ta.shopname_fee,
+ta.delivery_fee,
+ta.mkt_fee_pro,
+ROUND(tb.mkt_order*ta.pro_order_num,2) AS mkt_fee_tol
+FROM
+(SELECT
+tt.profit_de_month,
+tt.channel_type,
+tt.order_procode,
+tt.pro_sale,
+tt.pro_order_num,
+tt.gift_fee,
+tt.product_fee,
+tt.shopname_fee,
+tt.delivery_fee,
+ta.mkt_fee AS mkt_fee_pro
+FROM
+temp_data.profit_reta_product_month tt
+LEFT JOIN
+(SELECT 
+CONCAT(DATE_FORMAT(tt.mkt_time,"%Y-%m"),"-01") as mkt_month,
+tt.产品条形码,
+ROUND(SUM(tt.mkt_fee),2)AS mkt_fee 
+FROM bsy_business.market_product_day tt
+GROUP BY
+mkt_month,
+tt.产品条形码
+HAVING
+tt.产品条形码<>12306 AND DATE_FORMAT(mkt_month,"%Y")=2017)ta
+ON CONCAT(tt.profit_de_month,tt.order_procode)=CONCAT(ta.mkt_month,ta.产品条形码))ta
+LEFT JOIN
+(SELECT
+tt.profit_de_month,
+ta.mkt_fee/tt.tol_ordercounts AS mkt_order
+FROM
+(SELECT
+tt.profit_de_month,
+tt.channel_type,
+ROUND(SUM(tt.pro_order_num),2) AS tol_ordercounts
+FROM
+temp_data.profit_reta_product_month tt
+GROUP BY
+tt.profit_de_month,
+tt.channel_type)tt
+LEFT JOIN
+(SELECT 
+CONCAT(DATE_FORMAT(tt.mkt_time,"%Y-%m"),"-01") as mkt_month,
+tt.产品条形码,
+ROUND(SUM(tt.mkt_fee),2)AS mkt_fee 
+FROM bsy_business.market_product_day tt
+GROUP BY
+mkt_month,
+tt.产品条形码
+HAVING
+tt.产品条形码=12306 AND DATE_FORMAT(mkt_month,"%Y")=2017)ta
+ON tt.profit_de_month=ta.mkt_month
+GROUP BY
+tt.profit_de_month) tb
+ON ta.profit_de_month = tb.profit_de_month)ta
+LEFT JOIN master_data.std_product_price tb
+ON ta.order_procode=tb.条形码;
+--  ----------------------------------------------------------------------获得零售板块分产品利润分析数据
+START TRANSACTION;
+
+USE temp_data;
+
+DROP TABLE
+IF EXISTS profit_reta_product_day;
+CREATE TABLE profit_reta_product_day AS 
+SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.order_procode as order_procode,
+  ROUND(tt.pro_sale,2)as pro_sale,
+  ROUND(tt.pro_order_num,2)as pro_order_num, 
+  ROUND(tt.gift_fee,2) as gift_fee,
+  ROUND(tt.product_fee,2) as product_fee,
+  ROUND(tt.shopname_fee,2) as shopname_fee,
+  ROUND(tt.pro_order_num*5.7,2)as delivery_fee
+FROM
+	(SELECT
+  DATE_FORMAT(tt.profit_de_date,"%Y-%m-%d") as profit_de_date,
+  tt.channel_type as channel_type,
+  tt.order_procode as order_procode,
+  sum(tt.sale_sum) as pro_sale,
+  COUNT(DISTINCT tt.订单编号) as pro_order_num, 
+  sum(tt.gift_fee) as gift_fee,
+  sum(tt.product_fee) as product_fee,
+  sum(tt.shopname_fee) as shopname_fee
+FROM
+	temp_data.profit_proshopname tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  order_procode
+HAVING
+  tt.channel_type='零售'
+ORDER BY
+  profit_de_date,
+  channel_type,
+  order_procode) tt
+GROUP BY
+  profit_de_date,
+  channel_type,
+  order_procode
+HAVING
+  tt.channel_type='零售' AND DATE_FORMAT(profit_de_date,"%Y")=2017;
+START TRANSACTION;
+
+USE temp_data;
+
+UPDATE profit_reta_product_day tt
+SET  tt.order_procode=12307
+WHERE ISNULL(tt.order_procode);
+
+ROLLBACK;
+
+--  此部分汇合market_product_day数据，并输出BY 产品类型的日度数据
+START TRANSACTION;
+
+USE bsy_business;
+
+DROP TABLE
+IF EXISTS profit_retaproduct_day;
+
+CREATE TABLE profit_retaproduct_day AS
+SELECT
+ta.profit_de_date,
+ta.channel_type,
+ta.order_procode,
+ta.pro_sale,
+ta.pro_order_num,
+ta.gift_fee,
+ta.product_fee,
+ta.shopname_fee,
+ta.delivery_fee,
+ta.mkt_fee_pro,
+ta.mkt_fee_tol,
+(CASE WHEN ISNULL(tb.品名) THEN "其他" ELSE tb.品名 END) AS product_name
+FROM
+(SELECT
+ta.profit_de_date,
+ta.channel_type,
+ta.order_procode,
+ta.pro_sale,
+ta.pro_order_num,
+ta.gift_fee,
+ta.product_fee,
+ta.shopname_fee,
+ta.delivery_fee,
+ta.mkt_fee_pro,
+ROUND(tb.mkt_order*ta.pro_order_num,2) AS mkt_fee_tol
+FROM
+(SELECT
+tt.profit_de_date,
+tt.channel_type,
+tt.order_procode,
+tt.pro_sale,
+tt.pro_order_num,
+tt.gift_fee,
+tt.product_fee,
+tt.shopname_fee,
+tt.delivery_fee,
+ta.mkt_fee AS mkt_fee_pro
+FROM
+temp_data.profit_reta_product_day tt
+LEFT JOIN
+(SELECT 
+tt.mkt_time as mkt_time,
+tt.产品条形码,
+ROUND(SUM(tt.mkt_fee),2)AS mkt_fee 
+FROM bsy_business.market_product_day tt
+GROUP BY
+mkt_time,
+tt.产品条形码
+HAVING
+tt.产品条形码<>12306 AND DATE_FORMAT(mkt_time,"%Y")=2017)ta
+ON CONCAT(tt.profit_de_date,tt.order_procode)=CONCAT(ta.mkt_time,ta.产品条形码))ta
+LEFT JOIN
+(SELECT
+tt.profit_de_date,
+ta.mkt_fee/tt.tol_ordercounts AS mkt_order
+FROM
+(SELECT
+tt.profit_de_date,
+tt.channel_type,
+ROUND(SUM(tt.pro_order_num),2) AS tol_ordercounts
+FROM
+temp_data.profit_reta_product_day tt
+GROUP BY
+tt.profit_de_date,
+tt.channel_type)tt
+LEFT JOIN
+(SELECT 
+tt.mkt_time as mkt_time,
+tt.产品条形码,
+ROUND(SUM(tt.mkt_fee),2)AS mkt_fee 
+FROM bsy_business.market_product_day tt
+GROUP BY
+mkt_time,
+tt.产品条形码
+HAVING
+tt.产品条形码=12306 AND DATE_FORMAT(mkt_time,"%Y")=2017)ta
+ON tt.profit_de_date=ta.mkt_time
+GROUP BY
+tt.profit_de_date) tb
+ON ta.profit_de_date = tb.profit_de_date)ta
+LEFT JOIN master_data.std_product_price tb
+ON ta.order_procode=tb.条形码;
+
+-- -------------------------------------------------渠道模块----------------------------------------------------
+-- 此部分将渠道利润数据进行合并，并形成by月度，完成全部订单数据内部转化报表,BY 产品类型
+START TRANSACTION;
+USE temp_data;
+DROP TABLE
+IF EXISTS profit_dist_product_month;
+CREATE TABLE profit_dist_product_month AS 
+SELECT
+  tt.profit_de_month,
+  tt.channel_type,
+  tt.shop_name as shop_name,
+  tt.order_procode,
+  tt.pro_sale,
+  tt.pro_order_num, 
+  ROUND((CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE  tt.product_fee END),2) as product_fee,
+  ROUND((CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE  tt.gift_fee END),2) as gift_fee,
+  ROUND((CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE  tt.shopname_fee END),2) as shopname_fee,
+  ROUND((CASE WHEN ISNULL(tt.pro_sale) THEN 0 ELSE  tt.shopname_fee*0.0009 END),2) as delivery_fee
+FROM(
+  SELECT
+  CONCAT(DATE_FORMAT(tt.profit_de_date,"%Y-%m"),"-01") as profit_de_month,
+  tt.channel_type as channel_type,
+  tt.shop_name as shop_name,
+  tt.order_procode as order_procode,
+  sum(tt.sale_sum) as pro_sale,
+  COUNT(DISTINCT tt.`订单编号`) as pro_order_num, 
+  sum(CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE  tt.product_fee END ) as product_fee,
+  sum(CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE tt.gift_fee END ) as gift_fee,
+  sum(CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE  tt.shopname_fee END ) as shopname_fee
+  FROM
+	profit_proshopname tt
+  GROUP BY
+  profit_de_month,
+  channel_type,
+  order_procode
+  HAVING
+  channel_type='渠道' -- AND DATE_FORMAT(the_de_month,"%Y")=2017
+  ORDER BY
+  profit_de_month,
+  channel_type,
+  order_procode)tt;
+ROLLBACK;
+
+-- 此部分将渠道利润数据与渠道费用数据进行合并，完成全部订单数据内部转化报表,BY 产品类型
+START TRANSACTION;
+USE bsy_business;
+DROP TABLE
+IF EXISTS profit_distproduct_month;
+CREATE TABLE profit_distproduct_month AS 
+SELECT
+ ta.profit_de_month,
+ ta.channel_type,
+ ta.order_procode,
+ ta.pro_sale,
+ ROUND(ta.product_fee+ta.pro_sale*tb.pro_sale/100,2)AS product_fee,
+ ROUND(ta.gift_fee+ta.pro_sale*tb.gift_sale/100,2)AS gift_fee,
+ ROUND(ta.shopname_fee+ta.pro_sale*tb.shopname_sale/100,2)AS shopname_fee,
+ ROUND(ta.delivery_fee+ta.pro_sale*tb.delivery_sale/100,2)AS delivery_fee,
+(CASE WHEN ISNULL(tc.`品名`) THEN "其他" ELSE tc.品名 END) AS product_name
+FROM
+(SELECT
+     ta.profit_de_month,
+     ta.channel_type,
+     ta.order_procode,
+     ROUND(SUM(ta.pro_sale),2)AS pro_sale, 
+     ROUND(SUM(ta.pro_order_num),2)AS pro_order_num,
+     ROUND(SUM(ta.product_fee),2)AS product_fee,
+     ROUND(SUM(ta.gift_fee),2)AS gift_fee,
+     ROUND(SUM(ta.shopname_fee),2)AS shopname_fee,
+     ROUND(SUM(ta.delivery_fee),2)AS delivery_fee
+FROM
+(SELECT
+     tt.profit_de_month,
+     tt.channel_type,
+     tt.shop_name,
+     tt.order_procode,
+     (CASE WHEN ISNULL(tt.pro_sale) THEN 0 ELSE tt.pro_sale END) AS pro_sale,
+     (CASE WHEN ISNULL(tt.pro_order_num) THEN 0 ELSE tt.pro_order_num END) AS pro_order_num,
+     (CASE WHEN ISNULL(tt.product_fee) THEN 0 ELSE product_fee END) AS product_fee,
+     (CASE WHEN ISNULL(tt.gift_fee) THEN 0 ELSE gift_fee END) AS gift_fee,
+     (CASE WHEN ISNULL(tt.shopname_fee) THEN 0 ELSE shopname_fee END) AS shopname_fee,
+     (CASE WHEN ISNULL(tt.delivery_fee) THEN 0 ELSE delivery_fee END) AS delivery_fee
+FROM
+     temp_data.profit_dist_product_month tt
+WHERE
+     tt.order_procode IS NOT NULL)ta
+GROUP BY
+     ta.profit_de_month,
+     ta.channel_type,
+     ta.order_procode)ta
+LEFT JOIN(
+SELECT
+tt.profit_de_month,
+(CASE WHEN ISNULL(tb.product_fee) THEN 0 ELSE (tb.product_fee*100/tt.tol_sale) END) AS pro_sale ,
+(CASE WHEN ISNULL(tb.gift_fee) THEN 0 ELSE (tb.gift_fee*100/tt.tol_sale) END) AS gift_sale,
+(CASE WHEN ISNULL(tb.shopname_fee) THEN 0 ELSE (tb.shopname_fee*100/tt.tol_sale) END)AS shopname_sale,
+(CASE WHEN ISNULL(tb.delivery_fee) THEN 0 ELSE (tb.delivery_fee*100/tt.tol_sale) END) AS delivery_sale
+FROM
+(SELECT
+tt.profit_de_month,
+tt.channel_type,
+ROUND(SUM(tt.pro_sale),2) AS tol_sale
+FROM
+temp_data.profit_dist_product_month tt
+GROUP BY
+tt.profit_de_month,
+tt.channel_type)tt
+LEFT JOIN
+(SELECT
+     tb.profit_de_month,
+     tb.channel_type,
+     ROUND(SUM(tb.pro_sale),2)AS pro_sale, 
+     ROUND(SUM(tb.pro_order_num),2)AS pro_order_num,
+     ROUND(SUM(tb.product_fee),2)AS product_fee,
+     ROUND(SUM(tb.gift_fee),2)AS gift_fee,
+     ROUND(SUM(tb.shopname_fee),2)AS shopname_fee,
+     ROUND(SUM(tb.delivery_fee),2)AS delivery_fee
+FROM
+(SELECT
+     tt.profit_de_month,
+     tt.channel_type,
+     tt.shop_name,
+     tt.order_procode,
+     tt.pro_sale,
+     tt.pro_order_num,
+     tt.product_fee,
+     tt.gift_fee,
+     tt.shopname_fee,
+     tt.delivery_fee
+FROM
+     temp_data.profit_dist_product_month tt
+WHERE
+     ISNULL(tt.order_procode))tb
+GROUP BY
+     tb.profit_de_month,
+     tb.channel_type)tb
+ON
+  tt.profit_de_month=tb.profit_de_month)tb
+ON ta.profit_de_month=tb.profit_de_month
+LEFT JOIN master_data.std_product_price tc
+ON ta.order_procode=tc.条形码;
+
+-- 将为空的产品列表定义为12307，该编码作为无法识别产品编号
+START TRANSACTION;
+USE bsy_business;
+UPDATE profit_distproduct_month tt
+SET  tt.order_procode=12307
+WHERE ISNULL(tt.order_procode);
+ROLLBACK;
+
+
+
