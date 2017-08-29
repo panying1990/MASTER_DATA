@@ -1,0 +1,326 @@
+-- -------------------------------电商销售分析-总体--------------------------------------------
+-- 根据销售分析主题要求、数据特点确定分析基础表最小颗粒度，表字段数<15;
+-- 销售数据表按照，序列id、统计时间口径、各分析维度、匹配外键、分析字段进行聚合组配分析基础表。
+-- 渠道-店铺-分析维度
+START TRANSACTION;
+
+USE bsy_business;
+
+DROP TABLE
+IF EXISTS sale_channelshop_day;
+
+CREATE TABLE sale_channelshop_day AS SELECT
+	tt.sale_de_day,
+	tt.channel_type,
+	tt.shop_name,
+	tt.sale_total,
+	tt.order_num,
+	tt.product_num,
+	tt.user_num
+FROM
+	(
+		( 
+			SELECT
+				DATE_FORMAT(tt.发货日期, "%Y-%m-%d") AS sale_de_day,
+				tt.渠道类型 AS channel_type,
+				tt.店铺名称 AS shop_name,
+				ROUND(SUM(tt.产品销售总价sum),2) AS sale_total,
+				COUNT(DISTINCT tt.订单编号) AS order_num,
+				SUM(
+					CASE
+					WHEN tt.商品类型='产品' THEN
+						0
+					ELSE
+						tt.订货数量sum
+					END
+				) AS product_num,
+				COUNT(DISTINCT tt.买家ID) AS user_num
+			FROM
+				temp_data.trans_data_temp tt
+			GROUP BY
+				sale_de_day,
+				channel_type,
+				shop_name
+			HAVING
+				channel_type IN ('零售', '渠道')
+			ORDER BY
+				sale_de_day,
+				channel_type,
+				shop_name
+		)
+		UNION
+			(
+				SELECT
+					DATE_FORMAT(tt.审核时间, "%Y-%m-%d") AS sale_de_day,
+					(
+						CASE
+						WHEN tt.发货渠道 = '360' THEN
+							"呼叫中心"
+						ELSE
+							""
+						END
+					) AS channel_type,
+					(
+						CASE
+						WHEN tt.订单渠道 = "店面" THEN
+							"润良呼叫中心"
+						ELSE
+							""
+						END
+					) AS shop_name,
+					ROUND(SUM(tt.应付金额),2) AS sale_total,
+					COUNT(DISTINCT tt.平台单号) AS order_num,
+					SUM(
+						CASE
+						WHEN ISNULL(tt.审核人) THEN
+							0
+						ELSE
+							tt.总数量
+						END
+					) AS product_num,
+					COUNT(DISTINCT tt.会员卡号) AS user_num
+				FROM
+					master_data.mas_larlly_trans_data tt
+				GROUP BY
+					sale_de_day,
+					channel_type,
+					shop_name
+				HAVING
+					sale_de_day IS NOT NULL
+				ORDER BY
+					sale_de_day,
+					channel_type,
+					shop_name
+			)
+	) tt
+ORDER BY
+  tt.sale_de_day,
+	tt.channel_type,
+	tt.shop_name;
+
+-- 渠道费用部分不计入销售收入，在销售基础数据处理中将该部分直接删除。
+DELETE
+FROM
+	sale_channelshop_day
+WHERE
+	shop_name = "渠道-费用";
+
+ROLLBACK;
+-- 获得sale_channelshop_day 的月度汇总数据
+
+
+START TRANSACTION;
+
+USE bsy_business;
+
+DROP TABLE
+IF EXISTS sale_channelshop_month;
+
+CREATE TABLE sale_channelshop_month AS SELECT
+	concat(
+		LEFT (tt.sale_de_day, 8),
+		"01"
+	) AS sale_de_month,
+	tt.channel_type,
+	tt.shop_name,
+	SUM(tt.sale_total) AS sale_total,
+	SUM(tt.order_num) AS order_num,
+	SUM(tt.product_num) AS product_num,
+	SUM(tt.user_num) AS user_num
+FROM
+	bsy_business.sale_channelshop_day tt
+GROUP BY
+	sale_de_month,
+	tt.channel_type,
+	tt.shop_name
+ORDER BY
+	sale_de_month,
+	tt.channel_type,
+	tt.shop_name;
+
+ROLLBACK;
+
+--  从品牌-商品类型-商品品种-sku分析维度对数据进一步分类
+START TRANSACTION;
+
+USE bsy_business;
+
+DROP TABLE
+IF EXISTS sale_product_day;
+
+CREATE TABLE sale_product_day AS SELECT
+	tt.sale_de_day,
+	tt.channel_type,
+	tt.brand_type,
+	(
+		CASE
+		WHEN ISNULL(t1.产品品类) THEN
+			'赠品'
+		ELSE
+			t1.产品品类
+		END
+	) AS product_category,
+	tt.product_name,
+	tt.product_code,
+	tt.sale_total,
+	tt.order_num,
+	tt.product_num,
+	tt.user_num
+FROM
+	(
+		(
+			SELECT
+				DATE_FORMAT(tt.发货日期, "%Y-%m-%d") AS sale_de_day,
+				tt.渠道类型 AS channel_type,
+				tt.品牌 AS brand_type,
+				tt.品名 AS product_name,
+				tt.条形码 AS product_code,
+				ROUND(
+					SUM(tt.产品销售总价sum),
+					2
+				) AS sale_total,
+				COUNT(DISTINCT tt.订单编号) AS order_num,
+				SUM(
+					CASE
+					WHEN ISNULL(tt.产品成本价) THEN
+						0
+					ELSE
+						tt.订货数量sum
+					END
+				) AS product_num,
+				COUNT(DISTINCT tt.买家ID) AS user_num
+			FROM
+				temp_data.trans_data_temp tt
+			GROUP BY
+				sale_de_day,
+				channel_type,
+				brand_type,
+				product_name,
+				product_code
+			HAVING
+				channel_type IN ("零售", "渠道")
+			ORDER BY
+				sale_de_day,
+				channel_type,
+				brand_type,
+				product_name,
+				product_code
+		)
+		UNION
+			(
+				SELECT
+					DATE_FORMAT(tt.审核时间, "%Y-%m-%d") AS sale_de_day,
+					(
+						CASE
+						WHEN tt.发货渠道 = '360' THEN
+							"呼叫中心"
+						ELSE
+							""
+						END
+					) AS channel_type,
+					(
+						CASE
+						WHEN LEFT (tt.部门, 2) = "来利" THEN
+							"来利"
+						ELSE
+							""
+						END
+					) AS brand_type,
+					(
+						CASE
+						WHEN LEFT (tt.部门, 2) = "来利" THEN
+							"奥利司他"
+						ELSE
+							""
+						END
+					) AS product_name,
+					(
+						CASE
+						WHEN LEFT (tt.部门, 2) = "来利" THEN
+							"6939030230740"
+						ELSE
+							""
+						END
+					) AS product_code,
+					ROUND(SUM(tt.应付金额), 2) AS sale_total,
+					COUNT(DISTINCT tt.平台单号) AS order_num,
+					SUM(
+						CASE
+						WHEN ISNULL(tt.审核人) THEN
+							0
+						ELSE
+							tt.总数量
+						END
+					) AS product_num,
+					COUNT(DISTINCT tt.会员卡号) AS user_num
+				FROM
+					master_data.mas_larlly_trans_data tt
+				GROUP BY
+					sale_de_day,
+					channel_type,
+					brand_type,
+					product_name,
+					product_code
+				ORDER BY
+					sale_de_day,
+					channel_type,
+					brand_type,
+					product_name,
+					product_code
+			)
+	) tt
+LEFT JOIN master_data.std_product_price t1 ON tt.product_code = t1.条形码
+WHERE
+	tt.sale_de_day IS NOT NULL
+ORDER BY
+	tt.sale_de_day,
+	tt.channel_type,
+	tt.brand_type,
+	product_category,
+	tt.product_name,
+	tt.product_code;
+
+ROLLBACK;
+
+-- 添加按月度进行汇总的分产品基础表
+START TRANSACTION;
+
+USE bsy_business;
+
+DROP TABLE
+IF EXISTS sale_product_month;
+
+CREATE TABLE sale_product_month AS SELECT
+	concat(
+		LEFT (tt.sale_de_day, 8),
+		"01"
+	) AS sale_de_month,
+	tt.channel_type,
+	tt.brand_type,
+	tt.product_category,
+	tt.product_name,
+	tt.product_code,
+	ROUND(SUM(tt.sale_total), 2) AS sale_total,
+	SUM(tt.order_num) AS order_num,
+	SUM(tt.product_num) AS product_num,
+	SUM(tt.user_num) AS user_num
+FROM
+	bsy_business.sale_product_day tt
+GROUP BY
+	sale_de_month,
+	channel_type,
+	brand_type,
+	product_category,
+	product_name,
+	product_code
+ORDER BY
+	sale_de_month,
+	channel_type,
+	brand_type,
+	product_category,
+	product_name,
+	product_code;
+
+ROLLBACK;
+
+
