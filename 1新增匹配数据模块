@@ -1,0 +1,271 @@
+-- 该模块对新增数据中新增渠道商类型;产品信息、赠品信息、分销商信息进行分离，匹配至相应标准表中；
+-- AUTHORS:panying
+-- 加载更新各个店铺名称类型。
+START TRANSACTION;
+USE master_data;
+INSERT INTO std_channel -- 添加新增店铺名称
+(店铺名称,
+ 渠道类型,
+ 渠道添加说明
+)
+SELECT
+	tt.shop_name,
+	CASE
+WHEN (
+	tt.shop_name_len BETWEEN 36
+	AND 50
+) THEN
+	'外贸'
+WHEN (
+	tt.shop_name_len BETWEEN 26
+	AND 37
+) THEN
+	'渠道'
+ELSE
+	'零售'
+END AS 渠道类型,
+  CONCAT(CURDATE(),"添加") AS 渠道添加说明 
+FROM
+	(
+		SELECT
+			TRIM(tt.店铺名称) AS shop_name,
+			LENGTH(tt.店铺名称) AS shop_name_len
+		FROM
+			mas_trans_data tt
+		GROUP BY
+			shop_name
+		HAVING
+			shop_name NOT IN (
+				SELECT
+					TRIM(ss.店铺名称)
+				FROM
+					std_channel ss
+			)
+		ORDER BY
+			shop_name
+	) tt;
+ROLLBACK;
+
+-- 加载最新的产品名称
+
+START TRANSACTION;
+USE master_data;
+INSERT INTO std_product_price (
+	品牌,
+	条形码,
+	品名,
+	规格,
+	成本价,
+	历史数据,
+	数据备注,
+	生产单位
+) SELECT -- 添加2017年后新增产品信息。
+	tt.brand_name,
+	tt.product_id,
+	tt.product_name,
+	CASE
+WHEN ISNULL(tt.brand_name) THEN
+	''
+ELSE
+	''
+END AS product_sku,
+ tt.product_price,
+ CONCAT(CURDATE(), "添加") AS 历史数据,
+ CONCAT("系统添加") AS 数据备注,
+ CONCAT("未知") AS 生产单位
+FROM
+	(
+		SELECT
+			YEAR (tt.发货日期) AS product_year,
+			tt.店铺名称 AS shop_name,
+			TRIM(tt.品牌) AS brand_name,
+			TRIM(tt.条形码) AS product_id,
+			TRIM(tt.品名) AS product_name,
+			ROUND(AVG(DISTINCT tt.成交单价),2) AS product_price
+		FROM
+			mas_trans_data tt
+		GROUP BY
+			product_year,
+			shop_name,
+			brand_name,
+			product_name,
+			product_id
+		HAVING
+			product_id NOT IN (
+				SELECT
+					TRIM(ss.条形码)
+				FROM
+					std_product_price ss
+			)
+		AND brand_name IN ('碧生源','唯尚')
+		AND product_year = 2017
+		AND shop_name IN (
+			SELECT
+				tf.店铺名称
+			FROM
+				std_channel tf
+			WHERE
+				tf.渠道类型 IN ('零售','零售')
+		)
+		AND LENGTH(product_id) = 13
+		AND product_price > 5
+		ORDER BY
+			brand_name,
+			product_name,
+			product_id
+	) tt
+GROUP BY
+	tt.brand_name,
+	tt.product_id,
+	tt.product_name;
+ROLLBACK;
+
+-- 加载最新的赠品相关信息
+
+START TRANSACTION;
+USE master_data;
+-- 往标准匹配表中插入新增赠品信息，并咨询用户，修改产品单价
+INSERT INTO std_gifts_price (
+	品牌,
+	ERP名称,
+	ERP建码,
+	规格型号,
+	单位,
+	单价,
+	备注
+)SELECT
+	tt.brand_name,
+  tt.product_name,
+	tt.product_id,
+	CASE
+WHEN ISNULL(tt.brand_name) THEN
+	''
+ELSE
+	''
+END AS product_sku,
+ CONCAT("未知") AS 单位,
+ tt.product_price AS 单价,
+ CONCAT(CURDATE(),"系统添加") AS 备注
+FROM
+	(
+		SELECT
+			YEAR (tt.发货日期) AS product_year,
+			tt.店铺名称 AS shop_name,
+			TRIM(tt.品牌) AS brand_name,
+			TRIM(tt.条形码) AS product_id,
+			TRIM(tt.品名) AS product_name,
+			ROUND(AVG(DISTINCT tt.成交单价),2) AS product_price
+		FROM
+			mas_trans_data tt
+		GROUP BY
+			product_year,
+			shop_name,
+			brand_name,
+			product_name,
+			product_id
+		HAVING
+			product_id NOT IN (
+				SELECT
+					TRIM(ss.ERP建码)-- 在产品价格表及赠品采购表中均已存在的产品
+				FROM
+					std_gifts_price ss
+       UNION
+        SELECT
+					TRIM(pp.条形码)
+				FROM
+					std_product_price pp
+			)
+		AND brand_name IN ('赠品','碧生源','碧商分销')
+		AND product_year = 2017
+		AND shop_name IN (SELECT
+				tf.店铺名称
+			FROM
+				std_channel tf
+			WHERE
+				tf.渠道类型 IN ('零售','渠道'))
+		AND product_price < 5
+		ORDER BY
+      shop_name,
+			brand_name,
+			product_name,
+			product_id
+	) tt
+GROUP BY
+	tt.brand_name,
+	tt.product_id,
+	tt.product_name;
+ROLLBACK;
+
+-- 加载最新的淘宝客产品匹配相关信息
+START TRANSACTION;
+
+USE master_data;
+
+-- 往标准匹配表中插入新增淘宝客产品信息并匹配相关数据
+INSERT INTO std_tbk_product (产品名称) SELECT
+	tt.商品名称
+FROM
+	(
+		SELECT
+			tt.商品名称
+		FROM
+			mkt_tbk_data tt
+		GROUP BY
+			tt.商品名称
+	) tt
+WHERE
+	TRIM(tt.商品名称) NOT IN (
+		SELECT
+			TRIM(tt.产品名称)
+		FROM
+			std_tbk_product tt
+	);
+
+
+-- 往标准匹配表std_shopnamefee_id中插入新增数据
+START TRANSACTION;
+
+USE master_data;
+
+-- 往渠道费用中插入新增赠品信息，并咨询用户，修改产品单价
+INSERT INTO std_shopnamefee_id (
+	买家ID,
+	店铺名称ID,
+	店铺名称,
+	说明备注
+) SELECT
+	tt.`买家ID`,
+	CONCAT('渠道', '-费用') AS 店铺名称ID,
+	tt.`店铺名称`,
+	CONCAT(CURDATE(), '系统添加')
+FROM
+	mas_trans_data tt
+GROUP BY
+	tt.`店铺名称`,
+	tt.`买家ID`
+HAVING
+	tt.`买家ID` IN (
+		SELECT
+			tt.`买家ID`
+		FROM
+			(
+				SELECT
+					tt.`店铺名称`,
+					tt.`买家ID`
+				FROM
+					mas_trans_data tt
+				GROUP BY
+					tt.`店铺名称`,
+					tt.`买家ID`
+				HAVING
+					tt.`店铺名称` = '渠道-费用'
+			) tt
+	)
+AND tt.`店铺名称` <> '渠道-费用'
+AND tt.`买家ID` NOT IN (
+	SELECT
+		tt.`买家ID`
+	FROM
+		master_data.std_shopnamefee_id tt
+);
+
